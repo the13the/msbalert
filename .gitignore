@@ -1,0 +1,14 @@
+# Gizli bilgiler — asla commit etme
+.env
+
+# Bot çalışma dosyaları
+sent_alerts.json
+msb_alert.log
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

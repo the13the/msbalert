@@ -133,60 +133,55 @@ def save_sent_alert(alert_id: str, sent: set):
 
 def fetch_data() -> pd.DataFrame:
     """
-    Bybit API ile BTC/USDT 1h veri çek.
-    Bybit coğrafi kısıtlama yok, GitHub Actions ile uyumlu.
+    Kraken REST API — GitHub Actions'tan sorunsuz çalışır.
+    API key gerektirmez, coğrafi kısıt yok, 720 mum/istek.
     """
-    url           = "https://api.bybit.com/v5/market/kline"
-    interval_map  = {"1h": "60", "15m": "15", "4h": "240"}
-    b_interval    = interval_map.get(TIMEFRAME, "60")
-    limit         = 200   # Bybit max 200 per request
-    target_candles= LOOKBACK_MONTHS * 30 * 24
-    all_rows      = []
-    end_time      = int(datetime.now(timezone.utc).timestamp() * 1000)
+    url          = "https://api.kraken.com/0/public/OHLC"
+    interval_map = {"1h": 60, "15m": 15, "4h": 240}
+    interval     = interval_map.get(TIMEFRAME, 60)
+    target       = LOOKBACK_MONTHS * 30 * 24
+    all_rows     = []
+    since        = None  # ilk çağrıda en eski veriyi çeker
 
-    while len(all_rows) < target_candles:
-        params = {
-            "category": "linear",
-            "symbol":   "BTCUSDT",
-            "interval": b_interval,
-            "end":      end_time,
-            "limit":    limit,
-        }
+    for _ in range(20):  # max 20 istek = ~14400 mum
+        params = {"pair": "XBTUSDT", "interval": interval}
+        if since:
+            params["since"] = since
         r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
 
-        if data.get("retCode") != 0:
-            raise RuntimeError(f"Bybit API hatası: {data.get('retMsg')}")
+        if data.get("error"):
+            raise RuntimeError(f"Kraken hatası: {data['error']}")
 
-        rows = data["result"]["list"]
+        result = data["result"]
+        pair   = [k for k in result.keys() if k != "last"][0]
+        rows   = result[pair]
+
         if not rows:
             break
 
-        all_rows = rows + all_rows
-        # Bybit en yeni → en eski sıralar, rows[-1] en eski
-        end_time = int(rows[-1][0]) - 1
-        if len(rows) < limit:
+        all_rows.extend(rows)
+        since = result["last"]  # sonraki batch için
+
+        if len(all_rows) >= target:
+            break
+        if len(rows) < 720:
             break
 
     if not all_rows:
-        raise RuntimeError("Bybit'ten veri alınamadı!")
+        raise RuntimeError("Kraken'dan veri alınamadı!")
 
-    df = pd.DataFrame(all_rows, columns=["ts","o","h","l","c","v","turnover"])
-    df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="ms", utc=True)
+    df = pd.DataFrame(all_rows, columns=["ts","o","h","l","c","vwap","v","count"])
+    df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="s", utc=True)
     for col in ["o","h","l","c","v"]:
         df[col] = df[col].astype(float)
     df = (df[["ts","o","h","l","c","v"]]
           .drop_duplicates("ts")
           .sort_values("ts")
           .reset_index(drop=True))
-    log.info(f"Bybit'ten {len(df)} mum çekildi. Son fiyat: ${df['c'].iloc[-1]:,.2f}")
+    log.info(f"Kraken'dan {len(df)} mum çekildi. Son fiyat: ${df['c'].iloc[-1]:,.2f}")
     return df
-
-# ─────────────────────────────────────────
-# ZIGZAG + MSB HESAPLAMA
-# Pine Script logic'ini birebir Python'a çeviri
-# ─────────────────────────────────────────
 
 def calc_atr(df, period=14):
     hl = df["h"] - df["l"]

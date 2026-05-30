@@ -2,7 +2,7 @@ name: MSB Alert Bot
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # Her 5 dakikada bir çalışır
+    - cron: 
   workflow_dispatch:          # Manuel tetikleme butonu da olsun
 
 jobs:

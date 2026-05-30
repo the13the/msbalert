@@ -143,33 +143,36 @@ def fetch_data() -> pd.DataFrame:
     all_rows     = []
     since        = None  # ilk çağrıda en eski veriyi çeker
 
-    # Kraken'da since=0 → en eskiden başlar, her seferinde 720 mum ilerler
-    since = int((datetime.now(timezone.utc).timestamp() - LOOKBACK_MONTHS * 30 * 24 * 3600))
+    # since = kaç saniye öncesinden başla
+    since = int(datetime.now(timezone.utc).timestamp()) - (LOOKBACK_MONTHS * 30 * 24 * 3600)
 
-    for _ in range(20):  # max 20 istek = ~14400 mum
-        params = {"pair": "XBTUSDT", "interval": interval, "since": since}
+    for attempt in range(20):
+        params = {"pair": "XBTUSD", "interval": interval, "since": since}
         r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
 
-        if data.get("error"):
+        if data.get("error") and data["error"]:
             raise RuntimeError(f"Kraken hatası: {data['error']}")
 
-        result = data["result"]
-        pair   = [k for k in result.keys() if k != "last"][0]
-        rows   = result[pair]
+        result  = data["result"]
+        pair_key= [k for k in result.keys() if k != "last"][0]
+        rows    = result[pair_key]
 
         if not rows:
             break
 
         all_rows.extend(rows)
-        since = int(result["last"])  # sonraki batch için
+        new_since = int(result["last"])
 
-        if len(all_rows) >= target:
+        log.info(f"  Batch {attempt+1}: {len(rows)} mum, toplam: {len(all_rows)}")
+
+        # Eğer last değişmediyse veya yeterli veri varsa dur
+        if new_since == since or len(all_rows) >= target or len(rows) < 720:
             break
-        if len(rows) < 720:
-            break
-        time.sleep(1)  # rate limit
+
+        since = new_since
+        time.sleep(0.5)
 
     if not all_rows:
         raise RuntimeError("Kraken'dan veri alınamadı!")

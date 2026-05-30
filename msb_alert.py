@@ -42,14 +42,14 @@ SYMBOL         = "BTC-USD"
 DISPLAY_SYMBOL = "BTC/USDT"
 TIMEFRAME      = "1h"
 CHECK_INTERVAL = 300          # saniye (5 dakikada bir kontrol)
-LOOKBACK_MONTHS = 3           # kaç aylık veri
+LOOKBACK_MONTHS = 1   # Kraken 1h için max 720 mum = 30 gün           # kaç aylık veri
 
 # Pine Script parametreleri
 ZIGZAG_LEN  = 9
 FIB_FACTOR  = 0.33
 
 # Zone'a "girdi" sayılma toleransı (ATR çarpanı)
-ENTRY_TOLERANCE = 0.1
+ENTRY_TOLERANCE = 0.3   # zone'un 0.3 ATR yakınına girince tetikle
 
 # Daha önce alert gönderilmiş zone'ları tekrar atma (dosyaya kaydeder)
 SENT_ALERTS_FILE = "sent_alerts.json"
@@ -411,18 +411,26 @@ def compute_zigzag_msb(df: pd.DataFrame) -> list:
 
 def check_zone_entry(zones: list, current_price: float, atr: float) -> list:
     """
-    Mevcut fiyatın hangi zone'lara girdiğini döner.
-    Tolerans: ENTRY_TOLERANCE * ATR
+    Fiyat zone içindeyse VEYA zone'a yaklaşıyorsa tetikle.
+    - İçindeyse: direkt tetikle
+    - Bull zone: fiyat alttan yaklaşıyorsa (bottom - tolerance'a geldiyse)
+    - Bear zone: fiyat üstten yaklaşıyorsa (top + tolerance'a geldiyse)
     """
     tolerance = atr * ENTRY_TOLERANCE
     triggered = []
     for z in zones:
         if not z["active"]:
             continue
-        top    = z["top"]    + tolerance
-        bottom = z["bottom"] - tolerance
-        if bottom <= current_price <= top:
-            triggered.append(z)
+        top    = z["top"]
+        bottom = z["bottom"]
+        if z["direction"] == "bull":
+            # Fiyat zone içinde veya zone'a yaklaşıyor (alttan)
+            if (bottom - tolerance) <= current_price <= (top + tolerance):
+                triggered.append(z)
+        else:
+            # Fiyat zone içinde veya zone'a yaklaşıyor (üstten)
+            if (bottom - tolerance) <= current_price <= (top + tolerance):
+                triggered.append(z)
     return triggered
 
 # ─────────────────────────────────────────

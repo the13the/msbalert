@@ -12,7 +12,6 @@ Pine Script'ten birebir çevrilen logic:
 - Telegram'a detaylı mesaj gönderilir
 """
 
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
@@ -133,35 +132,45 @@ def save_sent_alert(alert_id: str, sent: set):
 # ─────────────────────────────────────────
 
 def fetch_data() -> pd.DataFrame:
-    from datetime import timedelta
-    end   = datetime.now(timezone.utc)
-    start = end - timedelta(days=LOOKBACK_MONTHS * 30)
+    """Binance API'den BTC/USDT 1h veri çek — yfinance'dan çok daha güvenilir."""
+    url    = "https://api.binance.com/api/v3/klines"
+    limit  = 1000  # max per request
+    interval_map = {"1h": "1h", "15m": "15m", "4h": "4h"}
+    b_interval = interval_map.get(TIMEFRAME, "1h")
 
-    chunks, chunk_end = [], end
-    while chunk_end > start:
-        chunk_start = max(chunk_end - timedelta(days=89), start)
-        df_chunk = yf.download(
-            SYMBOL,
-            start=chunk_start.strftime("%Y-%m-%d"),
-            end=chunk_end.strftime("%Y-%m-%d"),
-            interval=TIMEFRAME,
-            progress=False,
-            auto_adjust=True,
-        )
-        if not df_chunk.empty:
-            chunks.append(df_chunk)
-        chunk_end = chunk_start
+    all_rows = []
+    end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
+    total_candles = LOOKBACK_MONTHS * 30 * 24  # 1h için
 
-    if not chunks:
-        raise RuntimeError("Veri alınamadı!")
+    while len(all_rows) < total_candles:
+        params = {
+            "symbol":    "BTCUSDT",
+            "interval":  b_interval,
+            "endTime":   end_time,
+            "limit":     limit,
+        }
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            break
+        all_rows = data + all_rows
+        end_time = data[0][0] - 1  # bir önceki batch için
+        if len(data) < limit:
+            break
 
-    df = pd.concat(chunks).sort_index()
-    df = df[~df.index.duplicated(keep="first")]
-    df.columns = [c[0].lower() if isinstance(c, tuple) else c.lower() for c in df.columns]
-    df = df.rename(columns={"open":"o","high":"h","low":"l","close":"c","volume":"v"})
-    df = df.reset_index()
-    df = df.rename(columns={df.columns[0]: "ts"})
-    df = df.reset_index(drop=True)
+    if not all_rows:
+        raise RuntimeError("Binance'dan veri alınamadı!")
+
+    df = pd.DataFrame(all_rows, columns=[
+        "ts","o","h","l","c","v",
+        "close_time","qav","num_trades","tbbav","tbqav","ignore"
+    ])
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    for col in ["o","h","l","c","v"]:
+        df[col] = df[col].astype(float)
+    df = df[["ts","o","h","l","c","v"]].drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
+    log.info(f"Binance'dan {len(df)} mum çekildi. Son fiyat: ${df['c'].iloc[-1]:,.2f}")
     return df
 
 # ─────────────────────────────────────────

@@ -132,45 +132,55 @@ def save_sent_alert(alert_id: str, sent: set):
 # ─────────────────────────────────────────
 
 def fetch_data() -> pd.DataFrame:
-    """Binance API'den BTC/USDT 1h veri çek — yfinance'dan çok daha güvenilir."""
-    url    = "https://api.binance.com/api/v3/klines"
-    limit  = 1000  # max per request
-    interval_map = {"1h": "1h", "15m": "15m", "4h": "4h"}
-    b_interval = interval_map.get(TIMEFRAME, "1h")
+    """
+    Bybit API ile BTC/USDT 1h veri çek.
+    Bybit coğrafi kısıtlama yok, GitHub Actions ile uyumlu.
+    """
+    url           = "https://api.bybit.com/v5/market/kline"
+    interval_map  = {"1h": "60", "15m": "15", "4h": "240"}
+    b_interval    = interval_map.get(TIMEFRAME, "60")
+    limit         = 200   # Bybit max 200 per request
+    target_candles= LOOKBACK_MONTHS * 30 * 24
+    all_rows      = []
+    end_time      = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-    all_rows = []
-    end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
-    total_candles = LOOKBACK_MONTHS * 30 * 24  # 1h için
-
-    while len(all_rows) < total_candles:
+    while len(all_rows) < target_candles:
         params = {
-            "symbol":    "BTCUSDT",
-            "interval":  b_interval,
-            "endTime":   end_time,
-            "limit":     limit,
+            "category": "linear",
+            "symbol":   "BTCUSDT",
+            "interval": b_interval,
+            "end":      end_time,
+            "limit":    limit,
         }
         r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
-        if not data:
+
+        if data.get("retCode") != 0:
+            raise RuntimeError(f"Bybit API hatası: {data.get('retMsg')}")
+
+        rows = data["result"]["list"]
+        if not rows:
             break
-        all_rows = data + all_rows
-        end_time = data[0][0] - 1  # bir önceki batch için
-        if len(data) < limit:
+
+        all_rows = rows + all_rows
+        # Bybit en yeni → en eski sıralar, rows[-1] en eski
+        end_time = int(rows[-1][0]) - 1
+        if len(rows) < limit:
             break
 
     if not all_rows:
-        raise RuntimeError("Binance'dan veri alınamadı!")
+        raise RuntimeError("Bybit'ten veri alınamadı!")
 
-    df = pd.DataFrame(all_rows, columns=[
-        "ts","o","h","l","c","v",
-        "close_time","qav","num_trades","tbbav","tbqav","ignore"
-    ])
-    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    df = pd.DataFrame(all_rows, columns=["ts","o","h","l","c","v","turnover"])
+    df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="ms", utc=True)
     for col in ["o","h","l","c","v"]:
         df[col] = df[col].astype(float)
-    df = df[["ts","o","h","l","c","v"]].drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
-    log.info(f"Binance'dan {len(df)} mum çekildi. Son fiyat: ${df['c'].iloc[-1]:,.2f}")
+    df = (df[["ts","o","h","l","c","v"]]
+          .drop_duplicates("ts")
+          .sort_values("ts")
+          .reset_index(drop=True))
+    log.info(f"Bybit'ten {len(df)} mum çekildi. Son fiyat: ${df['c'].iloc[-1]:,.2f}")
     return df
 
 # ─────────────────────────────────────────

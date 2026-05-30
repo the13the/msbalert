@@ -426,32 +426,75 @@ def check_zone_entry(zones: list, current_price: float, atr: float) -> list:
 # TELEGRAM MESAJ FORMATI
 # ─────────────────────────────────────────
 
-def format_alert(zone: dict, current_price: float) -> str:
-    is_bull = zone["direction"] == "bull"
-    emoji   = "🟢" if is_bull else "🔴"
-    dir_str = "BULLISH" if is_bull else "BEARISH"
-    action  = "LONG fırsatı" if is_bull else "SHORT fırsatı"
+def format_zone_line(z: dict, current_price: float) -> str:
+    """Tek zone için kısa özet satırı."""
+    is_bull  = z["direction"] == "bull"
+    emoji    = "🟢" if is_bull else "🔴"
+    tag      = f"{'Bull' if is_bull else 'Bear'} OB-{z['bb_type']}"
+    dist     = current_price - z["bottom"] if is_bull else z["top"] - current_price
+    dist_pct = dist / current_price * 100
+    arrow    = "⬆️" if is_bull else "⬇️"
+    return (
+        f"{emoji} <b>{tag}</b>  {arrow}\n"
+        f"   ${z['bottom']:,.0f} — ${z['top']:,.0f}\n"
+        f"   Uzaklık: ${abs(dist):,.0f}  (%{abs(dist_pct):.1f})"
+    )
 
-    zone_mid  = (zone["top"] + zone["bottom"]) / 2
-    zone_size = zone["top"] - zone["bottom"]
-    pct_in    = abs(current_price - zone_mid) / zone_mid * 100
-
+def format_zone_summary(zones: list, current_price: float) -> str:
+    """Her çalışmada aktif zone'ların listesini göster."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    bulls = [z for z in zones if z["direction"] == "bull"]
+    bears = [z for z in zones if z["direction"] == "bear"]
+
+    lines = [
+        f"📊 <b>{DISPLAY_SYMBOL} {TIMEFRAME} — Aktif Zone'lar</b>",
+        f"⏰ {now}",
+        f"💰 Fiyat: <b>${current_price:,.2f}</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    if bulls:
+        lines.append("🟢 <b>BULL Zone'ları</b>")
+        for z in sorted(bulls, key=lambda x: x["top"], reverse=True):
+            lines.append(format_zone_line(z, current_price))
+    else:
+        lines.append("🟢 Bull zone yok")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+
+    if bears:
+        lines.append("🔴 <b>BEAR Zone'ları</b>")
+        for z in sorted(bears, key=lambda x: x["top"], reverse=True):
+            lines.append(format_zone_line(z, current_price))
+    else:
+        lines.append("🔴 Bear zone yok")
+
+    return "\n".join(lines)
+
+def format_alert(zone: dict, current_price: float) -> str:
+    """Fiyat zone'a girince gönderilen uyarı mesajı."""
+    is_bull  = zone["direction"] == "bull"
+    emoji    = "🚨🟢" if is_bull else "🚨🔴"
+    dir_str  = "BULL" if is_bull else "BEAR"
+    action   = "LONG" if is_bull else "SHORT"
+    tag      = f"{dir_str} OB-{zone['bb_type']}"
+    zone_size= zone["top"] - zone["bottom"]
+    now      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # Fiyatın zone içindeki konumu (%)
+    pos_pct  = (current_price - zone["bottom"]) / zone_size * 100
 
     msg = (
-        f"{emoji} <b>MSB Zone Girişi — {dir_str}</b>\n"
+        f"{emoji} <b>ZONE GİRİŞİ — {tag}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 <b>{DISPLAY_SYMBOL} {TIMEFRAME}</b>\n"
-        f"⏰ {now}\n\n"
-        f"📦 <b>Zone Tipi:</b> {dir_str} OB-{zone['bb_type']}\n"
-        f"📈 <b>Zone Üst:</b>  ${zone['top']:,.2f}\n"
-        f"📉 <b>Zone Alt:</b>  ${zone['bottom']:,.2f}\n"
+        f"📊 <b>{DISPLAY_SYMBOL} {TIMEFRAME}</b>  |  {now}\n\n"
+        f"💰 <b>Fiyat:</b> ${current_price:,.2f}\n"
+        f"📈 <b>Zone Üst:</b> ${zone['top']:,.2f}\n"
+        f"📉 <b>Zone Alt:</b> ${zone['bottom']:,.2f}\n"
         f"📐 <b>Zone Genişliği:</b> ${zone_size:,.2f}\n"
-        f"💰 <b>Mevcut Fiyat:</b> ${current_price:,.2f}\n"
-        f"📍 Zone ortasından uzaklık: %{pct_in:.2f}\n\n"
-        f"⚡ <b>{action}!</b>\n"
+        f"📍 <b>Zone içi konum:</b> %{pos_pct:.0f}\n\n"
+        f"⚡ <b>{action} fırsatı!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔍 MSB Bar: #{zone['msb_bar']}\n"
         f"📅 Zone oluşum: {str(zone['ts'])[:16]}"
     )
     return msg
@@ -490,6 +533,14 @@ def main():
 
         for z in (zones[-10:] if len(zones) >= 10 else zones):
             log.info(f"  [{z['direction'].upper():4s}] {z['bb_type']} | ${z['bottom']:,.0f} - ${z['top']:,.0f}")
+
+        # Her çalışmada aktif zone listesini Telegram'a gönder
+        if zones:
+            summary_id = f"summary_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}"
+            if summary_id not in sent_alerts:
+                summary_msg = format_zone_summary(zones, current_price)
+                if send_telegram(summary_msg):
+                    sent_alerts = save_sent_alert(summary_id, sent_alerts)
 
         triggered = check_zone_entry(zones, current_price, current_atr)
 

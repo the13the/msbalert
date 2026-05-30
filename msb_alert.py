@@ -143,10 +143,11 @@ def fetch_data() -> pd.DataFrame:
     all_rows     = []
     since        = None  # ilk çağrıda en eski veriyi çeker
 
+    # Kraken'da since=0 → en eskiden başlar, her seferinde 720 mum ilerler
+    since = int((datetime.now(timezone.utc).timestamp() - LOOKBACK_MONTHS * 30 * 24 * 3600))
+
     for _ in range(20):  # max 20 istek = ~14400 mum
-        params = {"pair": "XBTUSDT", "interval": interval}
-        if since:
-            params["since"] = since
+        params = {"pair": "XBTUSDT", "interval": interval, "since": since}
         r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
@@ -162,12 +163,13 @@ def fetch_data() -> pd.DataFrame:
             break
 
         all_rows.extend(rows)
-        since = result["last"]  # sonraki batch için
+        since = int(result["last"])  # sonraki batch için
 
         if len(all_rows) >= target:
             break
         if len(rows) < 720:
             break
+        time.sleep(1)  # rate limit
 
     if not all_rows:
         raise RuntimeError("Kraken'dan veri alınamadı!")

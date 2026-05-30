@@ -458,57 +458,44 @@ def main():
 
     sent_alerts = load_sent_alerts()
 
-    while True:
-        try:
-            log.info("Veri çekiliyor...")
-            df = fetch_data()
-            log.info(f"{len(df)} mum yüklendi.")
+    # GitHub Actions cron her 5 dk tetikler — tek seferlik çalışır
+    try:
+        log.info("Veri çekiliyor...")
+        df = fetch_data()
+        log.info(f"{len(df)} mum yüklendi.")
 
-            # ATR hesapla
-            atr_series = calc_atr(df, 14)
-            current_atr = atr_series.iloc[-1]
+        atr_series    = calc_atr(df, 14)
+        current_atr   = atr_series.iloc[-1]
+        current_price = float(df["c"].iloc[-1])
+        log.info(f"Mevcut fiyat: ${current_price:,.2f} | ATR: ${current_atr:,.2f}")
 
-            # Mevcut fiyat
-            current_price = float(df["c"].iloc[-1])
-            log.info(f"Mevcut fiyat: ${current_price:,.2f} | ATR: ${current_atr:,.2f}")
+        zones = compute_zigzag_msb(df)
+        log.info(f"Toplam zone: {len(zones)} (Bull: {sum(1 for z in zones if z['direction']=='bull')} | Bear: {sum(1 for z in zones if z['direction']=='bear')})")
 
-            # Zone'ları hesapla
-            zones = compute_zigzag_msb(df)
-            log.info(f"Toplam zone: {len(zones)} (Bull: {sum(1 for z in zones if z['direction']=='bull')} | Bear: {sum(1 for z in zones if z['direction']=='bear')})")
+        for z in (zones[-10:] if len(zones) >= 10 else zones):
+            log.info(f"  [{z['direction'].upper():4s}] {z['bb_type']} | ${z['bottom']:,.0f} - ${z['top']:,.0f}")
 
-            # Son zone'ları listele
-            recent = zones[-10:] if len(zones) >= 10 else zones
-            for z in recent:
-                log.info(f"  [{z['direction'].upper():4s}] {z['bb_type']} | ${z['bottom']:,.0f} - ${z['top']:,.0f}")
+        triggered = check_zone_entry(zones, current_price, current_atr)
 
-            # Zone girişi kontrol et
-            triggered = check_zone_entry(zones, current_price, current_atr)
+        if triggered:
+            log.info(f"{len(triggered)} zone tetiklendi!")
+            for zone in triggered:
+                zid = zone["zone_id"]
+                if zid in sent_alerts:
+                    log.info(f"  [{zid}] zaten gönderildi, atlanıyor.")
+                    continue
+                msg = format_alert(zone, current_price)
+                if send_telegram(msg):
+                    sent_alerts = save_sent_alert(zid, sent_alerts)
+                    log.info(f"  Alert gönderildi: {zid}")
+                else:
+                    log.error("  Telegram gönderilemedi!")
+        else:
+            log.info("Aktif zone girişi yok.")
 
-            if triggered:
-                log.info(f"{len(triggered)} zone tetiklendi!")
-                for zone in triggered:
-                    zid = zone["zone_id"]
-                    if zid in sent_alerts:
-                        log.info(f"  [{zid}] zaten gönderildi, atlanıyor.")
-                        continue
-                    msg = format_alert(zone, current_price)
-                    log.info(f"  Alert gönderiliyor: {zid}")
-                    if send_telegram(msg):
-                        sent_alerts = save_sent_alert(zid, sent_alerts)
-                    else:
-                        log.error("  Telegram gönderilemedi!")
-            else:
-                log.info("Aktif zone girişi yok.")
-
-        except KeyboardInterrupt:
-            log.info("Bot durduruldu (KeyboardInterrupt).")
-            break
-        except Exception as e:
-            log.error(f"Döngü hatası: {e}", exc_info=True)
-            send_telegram(f"⚠️ <b>MSB Bot Hatası</b>\n\n<code>{str(e)[:200]}</code>")
-
-        log.info(f"Sonraki kontrol {CHECK_INTERVAL}s sonra...\n")
-        time.sleep(CHECK_INTERVAL)
+    except Exception as e:
+        log.error(f"Hata: {e}", exc_info=True)
+        send_telegram(f"⚠️ <b>MSB Bot Hatası</b>\n\n<code>{str(e)[:200]}</code>")
 
 if __name__ == "__main__":
     main()
